@@ -9,7 +9,8 @@ from datetime import datetime
 import streamlit as st
 
 
-import sounddevice as sd
+import pyaudio
+import soundfile as sf
 import websockets
 
 
@@ -124,7 +125,7 @@ class SimpleRealtime:
 
 class StreamingAudioRecorder:
     """
-    Thanks Sonnet 3.5...
+    Cross-platform audio recorder using PyAudio
     """
 
     def __init__(self, sample_rate=24_000, channels=1):
@@ -133,30 +134,39 @@ class StreamingAudioRecorder:
         self.audio_queue = queue.Queue()
         self.is_recording = False
         self.audio_thread = None
+        self.stream = None
+        self.p = None
 
-    def callback(self, indata, frames, time, status):
+    def callback(self, in_data, frame_count, time_info, status):
         """
-        This will be called for each audio block
-        that gets recorded.
+        This will be called for each audio block that gets recorded.
         """
-        self.audio_queue.put(indata.copy())
+        self.audio_queue.put(in_data)
+        return (None, pyaudio.paContinue)
 
     def start_recording(self):
         self.is_recording = True
-        self.audio_thread = sd.InputStream(
-            dtype="int16",
-            samplerate=self.sample_rate,
+        self.p = pyaudio.PyAudio()
+        self.stream = self.p.open(
+            format=pyaudio.paInt16,
             channels=self.channels,
-            callback=self.callback,
-            blocksize=2_000
+            rate=self.sample_rate,
+            input=True,
+            frames_per_buffer=2000,
+            stream_callback=self.callback
         )
-        self.audio_thread.start()
+        self.stream.start_stream()
 
     def stop_recording(self):
         if self.is_recording:
             self.is_recording = False
-            self.audio_thread.stop()
-            self.audio_thread.close()
+            if self.stream:
+                self.stream.stop_stream()
+                self.stream.close()
+            if self.p:
+                self.p.terminate()
+            self.stream = None
+            self.p = None
 
     def get_audio_chunk(self):
         try:
