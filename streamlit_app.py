@@ -5,7 +5,7 @@ import threading
 from asyncio import run_coroutine_threadsafe
 
 import numpy as np
-import pyaudio
+import sounddevice as sd
 import streamlit as st
 
 from constants import (AUTOSCROLL_SCRIPT, DOCS,
@@ -22,7 +22,6 @@ buffer_lock = threading.Lock()
 if "audio_stream_started" not in st.session_state:
     st.session_state.audio_stream_started = False
 
-
 def audio_buffer_cb(pcm_audio_chunk):
     """
     Callback function so that our realtime client can fill the audio buffer
@@ -33,50 +32,27 @@ def audio_buffer_cb(pcm_audio_chunk):
         audio_buffer = np.concatenate([audio_buffer, pcm_audio_chunk])
 
 
-# callback function for real-time playback using PyAudio
-def audio_callback(in_data, frame_count, time_info, status):
+# callback function for real-time playback using sounddevice
+def sd_audio_cb(outdata, frames, time, status):
     global audio_buffer
+
     channels = 1
 
     with buffer_lock:
         # if there is enough audio in the buffer, send it
-        if len(audio_buffer) >= frame_count:
-            output_data = audio_buffer[:frame_count].reshape(
-                -1, channels).astype(np.int16).tobytes()
+        if len(audio_buffer) >= frames:
+            outdata[:] = audio_buffer[:frames].reshape(-1, channels)
             # remove the audio that has been played
-            audio_buffer = audio_buffer[frame_count:]
-            return (output_data, pyaudio.paContinue)
+            audio_buffer = audio_buffer[frames:]
         else:
             # if not enough audio, fill with silence
-            return (np.zeros(frame_count * channels, dtype=np.int16).tobytes(), pyaudio.paContinue)
+            outdata.fill(0)
 
 
 def start_audio_stream():
-    p = pyaudio.PyAudio()
-    try:
-        stream = p.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=24000,
-            output=True,
-            frames_per_buffer=2000,
-            stream_callback=audio_callback
-        )
-
-        stream.start_stream()
-
-        # Keep stream open until the app is closed
-        while stream.is_active():
-            asyncio.sleep(0.1)
-
-    except Exception as e:
-        st.error(f"Error starting audio stream: {str(e)}")
-
-    finally:
-        if 'stream' in locals() and stream:
-            stream.stop_stream()
-            stream.close()
-        p.terminate()
+    with sd.OutputStream(callback=sd_audio_cb, dtype="int16", samplerate=24_000, channels=1, blocksize=2_000):
+        # keep stream open indefinitely, simulate long duration
+        sd.sleep(int(10e6))
 
 
 @st.cache_resource(show_spinner=False)
@@ -92,7 +68,6 @@ def create_loop():
     thread = threading.Thread(target=loop.run_forever)
     thread.start()
     return loop, thread
-
 
 st.session_state.event_loop, worker_thread = create_loop()
 
@@ -114,14 +89,13 @@ def setup_client():
         return client
     return SimpleRealtime(event_loop=st.session_state.event_loop, audio_buffer_cb=audio_buffer_cb, debug=True)
 
-
 st.session_state.client = setup_client()
 
 
 if "recorder" not in st.session_state:
-    st.session_state.recorder = StreamingAudioRecorder()
+       st.session_state.recorder = StreamingAudioRecorder()
 if "recording" not in st.session_state:
-    st.session_state.recording = False
+       st.session_state.recording = False
 
 
 def toggle_recording():
@@ -142,7 +116,7 @@ def logs_text_area():
     if st.session_state.show_full_events:
         for _, _, log in logs:
             st.json(log, expanded=False)
-    else:
+    else: 
         for time, event_type, log in logs:
             if event_type == "server":
                 st.write(f"{time}\t:green[↓ server] {json.loads(log)['type']}")
@@ -161,9 +135,7 @@ def response_area():
 def audio_player():
     if not st.session_state.audio_stream_started:
         st.session_state.audio_stream_started = True
-        audio_thread = threading.Thread(target=start_audio_stream)
-        audio_thread.daemon = True
-        audio_thread.start()
+        start_audio_stream()
 
 
 @st.fragment(run_every=1)
@@ -172,8 +144,7 @@ def audio_recorder():
         # drain what's in the queue and send it to openai
         while not st.session_state.recorder.audio_queue.empty():
             chunk = st.session_state.recorder.audio_queue.get()
-            st.session_state.client.send("input_audio_buffer.append", {
-                                         "audio": base64.b64encode(chunk).decode()})
+            st.session_state.client.send("input_audio_buffer.append", {"audio": base64.b64encode(chunk).decode()})
 
 
 def st_app():
@@ -185,8 +156,7 @@ def st_app():
     main_tab, docs_tab = st.tabs(["Console", "Docs"])
 
     with main_tab:
-        st.markdown(
-            f"<img src='{OAI_LOGO_URL}' width='30px'/>   **realtime console**", unsafe_allow_html=True)
+        st.markdown(f"<img src='{OAI_LOGO_URL}' width='30px'/>   **realtime console**", unsafe_allow_html=True)
 
         with st.sidebar:
             if st.button("Connect", type="primary"):
@@ -196,14 +166,11 @@ def st_app():
                         if st.session_state.client.is_connected():
                             st.success("Connected to OpenAI Realtime API")
                         else:
-                            st.error(
-                                "Failed to connect to OpenAI Realtime API")
+                            st.error("Failed to connect to OpenAI Realtime API")
                     except Exception as e:
-                        st.error(
-                            f"Error connecting to OpenAI Realtime API: {str(e)}")
+                        st.error(f"Error connecting to OpenAI Realtime API: {str(e)}")
 
-        st.session_state.show_full_events = st.checkbox(
-            "Show Full Event Payloads", value=False)
+        st.session_state.show_full_events = st.checkbox("Show Full Event Payloads", value=False)
         with st.container(height=300, key="logs_container"):
             logs_text_area()
 
@@ -213,9 +180,7 @@ def st_app():
         button_text = "Stop Recording" if st.session_state.recording else "Send Audio"
         st.button(button_text, on_click=toggle_recording, type="primary")
 
-        _ = st.text_area("Enter your message:",
-                         key="input_text_area", height=200)
-
+        _ = st.text_area("Enter your message:", key = "input_text_area", height=200)
         def clear_input_cb():
             """
             Callback that will clear our message input box after the user
@@ -233,8 +198,7 @@ def st_app():
                         st.session_state.client.send(event_type, event)
                     st.success("Message sent successfully")
                 except json.JSONDecodeError:
-                    st.error(
-                        "Invalid JSON input. Please check your message format.")
+                    st.error("Invalid JSON input. Please check your message format.")
                 except Exception as e:
                     st.error(f"Error sending message: {str(e)}")
             else:
