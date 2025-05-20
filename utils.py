@@ -8,9 +8,7 @@ import tzlocal
 from datetime import datetime
 import streamlit as st
 
-
-import pyaudio
-import soundfile as sf
+import sounddevice as sd
 import websockets
 
 
@@ -125,7 +123,7 @@ class SimpleRealtime:
 
 class StreamingAudioRecorder:
     """
-    Cross-platform audio recorder using PyAudio
+    Thanks Sonnet 3.5...
     """
 
     def __init__(self, sample_rate=24_000, channels=1):
@@ -134,39 +132,30 @@ class StreamingAudioRecorder:
         self.audio_queue = queue.Queue()
         self.is_recording = False
         self.audio_thread = None
-        self.stream = None
-        self.p = None
 
-    def callback(self, in_data, frame_count, time_info, status):
+    def callback(self, indata, frames, time, status):
         """
-        This will be called for each audio block that gets recorded.
+        This will be called for each audio block
+        that gets recorded.
         """
-        self.audio_queue.put(in_data)
-        return (None, pyaudio.paContinue)
+        self.audio_queue.put(indata.copy())
 
     def start_recording(self):
         self.is_recording = True
-        self.p = pyaudio.PyAudio()
-        self.stream = self.p.open(
-            format=pyaudio.paInt16,
+        self.audio_thread = sd.InputStream(
+            dtype="int16",
+            samplerate=self.sample_rate,
             channels=self.channels,
-            rate=self.sample_rate,
-            input=True,
-            frames_per_buffer=2000,
-            stream_callback=self.callback
+            callback=self.callback,
+            blocksize=2_000
         )
-        self.stream.start_stream()
+        self.audio_thread.start()
 
     def stop_recording(self):
         if self.is_recording:
             self.is_recording = False
-            if self.stream:
-                self.stream.stop_stream()
-                self.stream.close()
-            if self.p:
-                self.p.terminate()
-            self.stream = None
-            self.p = None
+            self.audio_thread.stop()
+            self.audio_thread.close()
 
     def get_audio_chunk(self):
         try:
