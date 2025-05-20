@@ -1,4 +1,5 @@
 streamlit==1.39.0
 tzlocal==5.2
 websockets==13.1
-sounddevice==0.5.0
+PyAudio==0.2.13
+soundfile==0.12.1
